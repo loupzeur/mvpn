@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"sync"
 
 	"github.com/songgao/water"
 	"golang.org/x/net/ipv4"
@@ -18,10 +19,9 @@ type VPNProcess struct {
 	Iface   *water.Interface //interface for our server
 }
 
-func NewServer(iface *water.Interface, port int) VPNProcess {
+func NewVPN(iface *water.Interface, port int) VPNProcess {
 	return VPNProcess{INChan: make(chan []byte), OUTChan: make(chan []byte), Iface: iface, Port: port}
 }
-
 func (s VPNProcess) Run() {
 	//one chan for data in
 	go s.chanToIface()
@@ -30,10 +30,7 @@ func (s VPNProcess) Run() {
 }
 func (s VPNProcess) chanToIface() {
 	for data := range s.OUTChan {
-		n, err := s.Iface.Write(data)
-		if err != nil {
-			log.Println("Problem writing:", n, err)
-		}
+		s.Iface.Write(data)
 	}
 }
 func (s VPNProcess) ifaceToChan() {
@@ -57,38 +54,42 @@ func (s *VPNProcess) ProcessConnection() {
 	if nil != err {
 		log.Fatalln("Unable to listen on UDP socket:", err)
 	}
-	retip := map[string]*net.UDPAddr{}
+	var last *net.UDPAddr
 	go func() {
 		buf := make([]byte, BUFFERSIZE)
 		for {
 			n, addr, err := conn.ReadFromUDP(buf)
 			header, _ := ipv4.ParseHeader(buf[:n])
-			fmt.Printf("[UDP -> OUTChan]\tReceived %d bytes from %v: %v %v %v %v\n", n, addr, header.Src, header.Dst, header.ID, header.Len)
 			if err != nil || n == 0 {
 				fmt.Println("Error: ", err)
 				continue
 			}
-			retip["0"] = addr
+			dst, src := header.Dst.String(), header.Src.String()
+			if dst == "0.0.0.0" || src == "0.0.0.0" {
+				continue
+			}
+			if dst == "10.9.0.2" || src == "10.9.0.2" {
+				last = addr
+			}
 			s.OUTChan <- buf[:n]
 		}
 	}()
 	for data := range s.INChan {
-		header, _ := ipv4.ParseHeader(data)
-		if len(retip) > 0 {
-			caddr := retip["0"]
-			fmt.Printf("[INChan -> UDP]\t\tWriting %d bytes from %v: %v %v %v %v\n", len(data), caddr, header.Src, header.Dst, header.ID, header.Len)
+		if last != nil {
+			caddr := last
 			conn.WriteToUDP(data, caddr)
 		}
-
 	}
 }
 
 //ProcessClient process some client stuff
-func (s *VPNProcess) ProcessClient(lip *net.UDPAddr, rip *net.UDPAddr) {
-	conn, err := net.DialUDP("udp", lip, rip)
+func (s *VPNProcess) ProcessClient(lip *net.UDPAddr, rip *net.UDPAddr, wg *sync.WaitGroup) {
+	defer wg.Done()
+	conn, err := net.ListenUDP("udp", lip)
 	if err != nil {
 		log.Fatalln("Unable to get UDP socket:", err)
 	}
+	log.Println("Listening on :", lip.String())
 	go func() {
 		packet := make([]byte, BUFFERSIZE)
 		for {
@@ -96,14 +97,13 @@ func (s *VPNProcess) ProcessClient(lip *net.UDPAddr, rip *net.UDPAddr) {
 			if err != nil {
 				break
 			}
-			header, _ := ipv4.ParseHeader(packet[:plen])
-			fmt.Printf("[INChan -> UDP]\t\tReceiving %d bytes from %v: %v %v %v\n", plen, header.Src, header.Dst, header.ID, header.Len)
 			s.OUTChan <- packet[:plen]
 		}
 	}()
 	for data := range s.INChan {
-		header, _ := ipv4.ParseHeader(data)
-		fmt.Printf("[INChan -> UDP]\t\tWriting %d bytes to %v: %v %v %v %v\n", len(data), rip, header.Src, header.Dst, header.ID, header.Len)
-		conn.WriteToUDP(data, rip)
+		n, err := conn.WriteToUDP(data, rip)
+		if err != nil {
+			log.Println("Error writing packet ", n, err)
+		}
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 
 	"github.com/songgao/water"
 )
@@ -15,7 +16,7 @@ import (
 const (
 	// I use TUN interface, so only plain IP packet, no ethernet header + mtu is set to 1300
 	BUFFERSIZE = 1500
-	MTU        = "1300"
+	MTU        = "1444"
 )
 
 var (
@@ -52,7 +53,7 @@ func main() {
 	runIP("addr", "add", *localIP, "dev", iface.Name())
 	runIP("link", "set", "dev", iface.Name(), "up")
 
-	srv := NewServer(iface, *port)
+	srv := NewVPN(iface, *port)
 	srv.Run()
 	if *typeVPN == "server" {
 		srv.ProcessConnection()
@@ -69,13 +70,15 @@ func main() {
 			flag.Usage()
 			log.Fatalln("\nlocal ips are not specified")
 		}
+		wg := sync.WaitGroup{}
 		for _, lip := range strings.Split(*localIPs, " ") {
-			lipA, err := net.ResolveUDPAddr("udp", lip+":50000")
+			lipA, err := net.ResolveUDPAddr("udp", lip+":0")
 			if err != nil {
 				log.Fatalln("Local addr", lip, "is not valid:", err)
 			}
-			srv.ProcessClient(lipA, remote)
+			wg.Add(1)
+			go srv.ProcessClient(lipA, remote, &wg)
 		}
+		wg.Wait()
 	}
-
 }
