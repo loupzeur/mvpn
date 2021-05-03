@@ -13,18 +13,13 @@ import (
 	"github.com/songgao/water"
 )
 
-const (
-	// I use TUN interface, so only plain IP packet, no ethernet header + mtu is set to 1300
-	BUFFERSIZE = 1500
-	MTU        = "1444"
-)
-
 var (
 	typeVPN  = flag.String("type", "server", "server or client depending on configuration")
 	localIP  = flag.String("local", "", "Local tun interface IP/MASK like 192.168.0.1⁄24")
 	remoteIP = flag.String("remote", "", "Remote server (external) IP like 8.8.8.8")
 	localIPs = flag.String("localips", "", "List of IP of interface to use for aggregation")
 	port     = flag.Int("port", 43210, "UDP port for communication")
+	MTU      = flag.Int("mtu", 1500, "MTU for interface")
 )
 
 func runIP(args ...string) {
@@ -49,7 +44,7 @@ func main() {
 		log.Fatalln("Unable to allocate TUN interface:", err)
 	}
 	log.Println("Interface allocated:", iface.Name())
-	runIP("link", "set", "dev", iface.Name(), "mtu", MTU)
+	runIP("link", "set", "dev", iface.Name(), "mtu", fmt.Sprintf("%d", *MTU))
 	runIP("addr", "add", *localIP, "dev", iface.Name())
 	runIP("link", "set", "dev", iface.Name(), "up")
 

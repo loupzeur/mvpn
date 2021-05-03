@@ -7,7 +7,7 @@ import (
 	"sync"
 
 	"github.com/songgao/water"
-	"golang.org/x/net/ipv4"
+	//https://github.com/buger/goterm
 )
 
 //Global stuff
@@ -34,7 +34,7 @@ func (s VPNProcess) chanToIface() {
 	}
 }
 func (s VPNProcess) ifaceToChan() {
-	packet := make([]byte, BUFFERSIZE)
+	packet := make([]byte, *MTU)
 	for {
 		plen, err := s.Iface.Read(packet)
 		if err != nil {
@@ -56,28 +56,20 @@ func (s *VPNProcess) ProcessConnection() {
 	}
 	var last *net.UDPAddr
 	go func() {
-		buf := make([]byte, BUFFERSIZE)
+		buf := make([]byte, *MTU)
 		for {
 			n, addr, err := conn.ReadFromUDP(buf)
-			header, _ := ipv4.ParseHeader(buf[:n])
 			if err != nil || n == 0 {
 				fmt.Println("Error: ", err)
 				continue
 			}
-			dst, src := header.Dst.String(), header.Src.String()
-			if dst == "0.0.0.0" || src == "0.0.0.0" {
-				continue
-			}
-			if dst == "10.9.0.2" || src == "10.9.0.2" {
-				last = addr
-			}
+			last = addr
 			s.OUTChan <- buf[:n]
 		}
 	}()
 	for data := range s.INChan {
 		if last != nil {
-			caddr := last
-			conn.WriteToUDP(data, caddr)
+			conn.WriteToUDP(data, last)
 		}
 	}
 }
@@ -91,7 +83,7 @@ func (s *VPNProcess) ProcessClient(lip *net.UDPAddr, rip *net.UDPAddr, wg *sync.
 	}
 	log.Println("Listening on :", lip.String())
 	go func() {
-		packet := make([]byte, BUFFERSIZE)
+		packet := make([]byte, *MTU)
 		for {
 			plen, err := conn.Read(packet)
 			if err != nil {
