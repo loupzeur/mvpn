@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/songgao/water"
+	//"github.com/lucas-clemente/quic-go"
 )
 
 var (
@@ -51,7 +52,7 @@ func main() {
 	srv := NewVPN(iface, *port)
 	srv.Run()
 	if *typeVPN == "server" {
-		srv.ProcessConnection()
+		srv.ProcessServerQuic()
 	} else { //client stuff
 		if remoteIP == nil || *remoteIP == "" {
 			flag.Usage()
@@ -72,7 +73,7 @@ func main() {
 				log.Fatalln("Local addr", lip, "is not valid:", err)
 			}
 			wg.Add(1)
-			go srv.ProcessClient(lipA, remote, &wg)
+			go srv.ProcessClientQuic(lipA, remote, &wg)
 		}
 		wg.Wait()
 	}
