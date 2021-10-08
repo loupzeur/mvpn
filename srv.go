@@ -11,6 +11,7 @@ import (
 	"log"
 	"math/big"
 	"net"
+	"strings"
 	"sync"
 
 	"github.com/lucas-clemente/quic-go"
@@ -36,8 +37,26 @@ func (s VPNProcess) Run() {
 	//one chan for data out
 	go s.ifaceToChan()
 }
+
+//func that takes array of byte of ip header and return sequence number
+func getSequence(data []byte) int {
+	startTcp := 20
+	for i := range data[20:60] {
+		if i == 0x0F {
+			startTcp += i
+			break
+		}
+	}
+	return int(data[startTcp+4])<<24 | int(data[startTcp+5])<<16 | int(data[startTcp+6])<<8 | int(data[startTcp+7])
+}
+
 func (s VPNProcess) chanToIface() {
 	for data := range s.OUTChan {
+		//check tcp
+		if len(data) > 12 && data[12] == 0x06 {
+			log.Printf("IP packet is TCP!!\n%d\n%+v\n", getSequence(data), data[:60])
+			//will require reordering of the packet
+		}
 		s.Iface.Write(data)
 	}
 }
@@ -52,62 +71,7 @@ func (s VPNProcess) ifaceToChan() {
 	}
 }
 
-//ProcessConnection process server stuff
-func (s *VPNProcess) ProcessConnection() {
-	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%v", s.Port))
-	if nil != err {
-		log.Fatalln("Unable to get UDP socket:", err)
-	}
-	conn, err := net.ListenUDP("udp", addr)
-	if nil != err {
-		log.Fatalln("Unable to listen on UDP socket:", err)
-	}
-	var last *net.UDPAddr
-	go func() {
-		buf := make([]byte, *MTU)
-		for {
-			n, addr, err := conn.ReadFromUDP(buf)
-			if err != nil || n == 0 {
-				fmt.Println("Error: ", err)
-				continue
-			}
-			last = addr
-			s.OUTChan <- buf[:n]
-		}
-	}()
-	for data := range s.INChan {
-		if last != nil {
-			conn.WriteToUDP(data, last)
-		}
-	}
-}
-
-//ProcessClient process some client stuff
-func (s *VPNProcess) ProcessClient(lip *net.UDPAddr, rip *net.UDPAddr, wg *sync.WaitGroup) {
-	defer wg.Done()
-	conn, err := net.ListenUDP("udp", lip)
-	if err != nil {
-		log.Fatalln("Unable to get UDP socket:", err)
-	}
-	log.Println("Listening on :", lip.String())
-	go func() {
-		packet := make([]byte, *MTU)
-		for {
-			plen, err := conn.Read(packet)
-			if err != nil {
-				break
-			}
-			s.OUTChan <- packet[:plen]
-		}
-	}()
-	for data := range s.INChan {
-		n, err := conn.WriteToUDP(data, rip)
-		if err != nil {
-			log.Println("Error writing packet ", n, err)
-		}
-	}
-}
-
+//ProcessServerQuic process QUIC related packets on server sides
 func (s *VPNProcess) ProcessServerQuic() {
 	listener, err := quic.ListenAddr(fmt.Sprintf(":%v", s.Port), generateTLSConfig(), nil)
 
@@ -150,6 +114,7 @@ func (s *VPNProcess) ProcessClientQuic(lip *net.UDPAddr, rip *net.UDPAddr, wg *s
 		InsecureSkipVerify: true,
 		NextProtos:         []string{"quic-echo-example"},
 	}
+starStream:
 	conn, err := net.ListenUDP("udp", lip)
 	if err != nil {
 		log.Fatalln("Unable to get UDP socket:", err)
@@ -157,11 +122,11 @@ func (s *VPNProcess) ProcessClientQuic(lip *net.UDPAddr, rip *net.UDPAddr, wg *s
 	log.Println("Listening on :", lip.String())
 	session, err := quic.Dial(conn, rip, "", tlsConf, nil)
 	if err != nil {
-		return
+		log.Fatalln("Unable to connect to server: ", rip.IP, rip.Port, err)
 	}
 	stream, err := session.OpenStream()
 	if err != nil {
-		return
+		log.Fatalln("Unable to open stream :", err)
 	}
 	go func() {
 		packet := make([]byte, *MTU)
@@ -176,6 +141,10 @@ func (s *VPNProcess) ProcessClientQuic(lip *net.UDPAddr, rip *net.UDPAddr, wg *s
 	for data := range s.INChan {
 		n, err := stream.Write(data)
 		if err != nil {
+			if strings.Contains(err.Error(), "imeout") {
+				log.Println("Disconnected from timeout")
+				goto starStream //reconnect to server
+			}
 			log.Println("Error writing packet ", n, err)
 		}
 	}

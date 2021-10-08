@@ -11,7 +11,6 @@ import (
 	"sync"
 
 	"github.com/songgao/water"
-	//"github.com/lucas-clemente/quic-go"
 )
 
 var (
@@ -49,10 +48,11 @@ func main() {
 	runIP("addr", "add", *localIP, "dev", iface.Name())
 	runIP("link", "set", "dev", iface.Name(), "up")
 
-	srv := NewVPN(iface, *port)
-	srv.Run()
+	//connect the interface and channels
+	ifc := NewVPN(iface, *port)
+	ifc.Run()
 	if *typeVPN == "server" {
-		srv.ProcessServerQuic()
+		ifc.ProcessServerQuic()
 	} else { //client stuff
 		if remoteIP == nil || *remoteIP == "" {
 			flag.Usage()
@@ -73,8 +73,33 @@ func main() {
 				log.Fatalln("Local addr", lip, "is not valid:", err)
 			}
 			wg.Add(1)
-			go srv.ProcessClientQuic(lipA, remote, &wg)
+			go ifc.ProcessClientQuic(lipA, remote, &wg)
 		}
 		wg.Wait()
+	}
+}
+
+func localAddresses() {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		fmt.Print(fmt.Errorf("localAddresses: %+v\n", err.Error()))
+		return
+	}
+	for _, i := range ifaces {
+		addrs, err := i.Addrs()
+		if err != nil {
+			fmt.Print(fmt.Errorf("localAddresses: %+v\n", err.Error()))
+			continue
+		}
+		for _, a := range addrs {
+			switch v := a.(type) {
+			case *net.IPAddr:
+				fmt.Printf("%v : %s (%s)\n", i.Name, v, v.IP.DefaultMask())
+
+			case *net.IPNet:
+				fmt.Printf("%v : %s [%v/%v]\n", i.Name, v, v.IP, v.Mask)
+			}
+
+		}
 	}
 }
