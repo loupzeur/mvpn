@@ -73,7 +73,7 @@ func (s VPNProcess) ifaceToChan() {
 
 //ProcessServerQuic process QUIC related packets on server sides
 func (s *VPNProcess) ProcessServerQuic() {
-	listener, err := quic.ListenAddr(fmt.Sprintf(":%v", s.Port), generateTLSConfig(), nil)
+	listener, err := quic.ListenAddr(fmt.Sprintf("0.0.0.0:%v", s.Port), generateTLSConfig(), nil)
 
 	if nil != err {
 		log.Fatalln("Unable to listen on UDP socket:", err)
@@ -82,6 +82,7 @@ func (s *VPNProcess) ProcessServerQuic() {
 	for {
 		sess, err := listener.Accept(context.Background())
 		if err != nil {
+			log.Fatalln("Unable to accept session:", err)
 			return
 		}
 		stream, err := sess.AcceptStream(context.Background())
