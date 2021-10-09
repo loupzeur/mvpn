@@ -16,6 +16,7 @@ import (
 
 	"github.com/lucas-clemente/quic-go"
 	"github.com/songgao/water"
+	"golang.org/x/net/ipv4"
 	//https://github.com/buger/goterm
 )
 
@@ -39,22 +40,29 @@ func (s VPNProcess) Run() {
 }
 
 //func that takes array of byte of ip header and return sequence number
-func getSequence(data []byte) int {
-	startTcp := 20
-	for i := range data[20:60] {
-		if i == 0x0F {
-			startTcp += i
-			break
-		}
+//return src, dst, seq and ack from tcp packet
+func getSequence(data []byte) (int, int, int, int) {
+	startTcp := 0 //int(data[0]&0x0f) << 2 //length of ip header from packet
+	lenH := len(data)
+
+	i := startTcp + 4 //start of sequence
+	src := int(data[0])<<8 | int(data[1])
+	dst := int(data[2])<<8 | int(data[3])
+	if i+7 > lenH {
+		return src, dst, 0, 0
 	}
-	return int(data[startTcp+4])<<24 | int(data[startTcp+5])<<16 | int(data[startTcp+6])<<8 | int(data[startTcp+7])
+	return src, dst,
+		int(data[(i)])<<24 | int(data[i+1])<<16 | int(data[i+2])<<8 | int(data[i+3]),
+		int(data[(i+4)])<<24 | int(data[i+5])<<16 | int(data[i+6])<<8 | int(data[i+7])
 }
 
 func (s VPNProcess) chanToIface() {
 	for data := range s.OUTChan {
-		//check tcp
-		if len(data) > 12 && data[12] == 0x06 {
-			log.Printf("IP packet is TCP!!\n%d\n%+v\n", getSequence(data), data[:60])
+		//need to reorder tcp packet going out of interface
+		if len(data) > 12 && data[9] == 0x06 {
+			h, _ := ipv4.ParseHeader(data)
+			src, dst, seq, ack := getSequence(data[h.Len:])
+			log.Printf("<=%s %s %d %d %d %d %d\n", h.Dst.String(), h.Src.String(), h.Protocol, src, dst, seq, ack)
 			//will require reordering of the packet
 		}
 		s.Iface.Write(data)
@@ -94,7 +102,12 @@ func (s *VPNProcess) ProcessServerQuic() {
 			for {
 				n, err := stream.Read(buf)
 				if err != nil || n == 0 {
-					fmt.Println("Error: ", err)
+					if strings.Contains(err.Error(), "imeout") {
+						//connection is closed client side
+						stream.Close()
+						break
+					}
+					fmt.Println("Error Read stream Server : ", err)
 					continue
 				}
 				s.OUTChan <- buf[:n]
@@ -102,7 +115,11 @@ func (s *VPNProcess) ProcessServerQuic() {
 		}()
 		go func() {
 			for data := range s.INChan {
-				stream.Write(data)
+				_, err := stream.Write(data)
+				if err != nil && (strings.Contains(err.Error(), "imeout") ||
+					strings.Contains(err.Error(), "losed")) {
+					break //stop this loop
+				}
 			}
 		}()
 	}
