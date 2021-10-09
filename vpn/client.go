@@ -18,7 +18,6 @@ func (s *VPNProcess) ProcessClientQuic(lip *net.UDPAddr, rip *net.UDPAddr, wg *s
 		InsecureSkipVerify: true,
 		NextProtos:         []string{"quic-echo-example"},
 	}
-	utils.ContinuousPing(rip.String())
 starStream:
 	conn, err := net.ListenUDP("udp", lip)
 	if err != nil {
@@ -33,6 +32,8 @@ starStream:
 	if err != nil {
 		log.Fatalln("Unable to open stream :", err)
 	}
+	//todo use remote gateway address
+	go utils.ContinuousPing("10.9.0.1")
 	go func() {
 		packet := make([]byte, MTU)
 		for {

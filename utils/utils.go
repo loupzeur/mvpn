@@ -92,16 +92,21 @@ func Ping(addr string) (*net.IPAddr, time.Duration, error) {
 
 //just ping continuously the address every 20 seconds to avoid timeout
 func ContinuousPing(addr string) {
+	nbError := 0
 	for {
-		log.Println("Pinging", addr)
 		_, d, err := Ping(addr)
 		if err != nil && (strings.Contains(err.Error(), "losed") || strings.Contains(err.Error(), "imeout")) {
-			break
+			nbError++
+			if nbError >= 3 {
+				break
+			}
+		} else if err == nil {
+			nbError = 0
+			log.Println("Pinged", addr, d.Milliseconds(), "ms")
 		}
-		log.Println("Pinged", addr, d.Seconds())
 		time.Sleep(20 * time.Second)
 	}
-	log.Println("Ended pinnging", addr)
+	log.Println("Ended pinging", addr)
 }
 
 //tls stuff
