@@ -118,6 +118,7 @@ func (s *VPNProcess) ProcessServerQuic() {
 				_, err := stream.Write(data)
 				if err != nil && (strings.Contains(err.Error(), "imeout") ||
 					strings.Contains(err.Error(), "losed")) {
+					log.Println("Closing stream with : ", sess.RemoteAddr().String())
 					break //stop this loop
 				}
 			}
