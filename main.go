@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os"
-	"os/exec"
 	"strings"
 	"sync"
 
+	"github.com/loupzeur/mvpn/utils"
+	"github.com/loupzeur/mvpn/vpn"
 	"github.com/songgao/water"
 )
 
@@ -19,19 +19,8 @@ var (
 	remoteIP = flag.String("remote", "", "Remote server (external) IP like 8.8.8.8")
 	localIPs = flag.String("localips", "", "List of IP of interface to use for aggregation")
 	port     = flag.Int("port", 43210, "UDP port for communication")
-	MTU      = flag.Int("mtu", 1500, "MTU for interface")
+	MTU      = flag.Int("mtu", 1440, "MTU for interface")
 )
-
-func runIP(args ...string) {
-	cmd := exec.Command("/sbin/ip", args...)
-	cmd.Stderr = os.Stderr
-	cmd.Stdout = os.Stdout
-	cmd.Stdin = os.Stdin
-	err := cmd.Run()
-	if nil != err {
-		log.Fatalln("Error running /sbin/ip:", err)
-	}
-}
 
 func main() {
 	flag.Parse()
@@ -39,17 +28,23 @@ func main() {
 		flag.Usage()
 		log.Fatalln("\nlocal ip is not specified")
 	}
+
+	//! to be removed
+	//create a tunnel externaly to avoid root requirements
 	iface, err := water.New(water.Config{DeviceType: water.TUN})
 	if nil != err {
 		log.Fatalln("Unable to allocate TUN interface:", err)
 	}
 	log.Println("Interface allocated:", iface.Name())
-	runIP("link", "set", "dev", iface.Name(), "mtu", fmt.Sprintf("%d", *MTU))
-	runIP("addr", "add", *localIP, "dev", iface.Name())
-	runIP("link", "set", "dev", iface.Name(), "up")
+	utils.RunIP("link", "set", "dev", iface.Name(), "mtu", fmt.Sprintf("%d", *MTU))
+	utils.RunIP("addr", "add", *localIP, "dev", iface.Name())
+	utils.RunIP("link", "set", "dev", iface.Name(), "up")
+
+	//end to be removed
 
 	//connect the interface and channels
-	ifc := NewVPN(iface, *port)
+	vpn.MTU = *MTU //set MTU
+	ifc := vpn.NewVPN(iface, *port)
 	ifc.Run()
 	if *typeVPN == "server" {
 		ifc.ProcessServerQuic()
@@ -76,30 +71,5 @@ func main() {
 			go ifc.ProcessClientQuic(lipA, remote, &wg)
 		}
 		wg.Wait()
-	}
-}
-
-func localAddresses() {
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		fmt.Print(fmt.Errorf("localAddresses: %+v\n", err.Error()))
-		return
-	}
-	for _, i := range ifaces {
-		addrs, err := i.Addrs()
-		if err != nil {
-			fmt.Print(fmt.Errorf("localAddresses: %+v\n", err.Error()))
-			continue
-		}
-		for _, a := range addrs {
-			switch v := a.(type) {
-			case *net.IPAddr:
-				fmt.Printf("%v : %s (%s)\n", i.Name, v, v.IP.DefaultMask())
-
-			case *net.IPNet:
-				fmt.Printf("%v : %s [%v/%v]\n", i.Name, v, v.IP, v.Mask)
-			}
-
-		}
 	}
 }

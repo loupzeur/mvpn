@@ -1,0 +1,54 @@
+# Aggregation VPN
+
+This is an aggregation VPN (will merge internet connections).
+All non tcp connection are OK so far.
+
+TCP connections generate lots of DUP due to out of order stuff, this require more work :/
+ * if an interface is faster than the other two following tcp packets can switch position,
+generating an out of order packet ... slowing down tcp connections
+
+
+## to build
+```
+go build
+```
+
+## on the server side :
+To set IP of tun interface 10.9.0.1/24 (require network mask)
+To set Listening Port 5353
+To set Mtu of 1440
+
+```
+sudo ./mvpn -type server -local 10.9.0.1/24 -port 5353 -mtu 1440
+```
+
+## Clients side stuff
+will require 'advanced' routing to avoid disconnecting your interface from internet
+for 192.168.96.0 network and 192.168.96.128 gateway for device wlp3s0 using adsl1
+```
+sudo ip rule add from 192.168.96.0/24 table adsl1
+sudo ip route add 192.168.96.0/24 dev wlp3s0 table adsl1
+sudo ip route add default via 192.168.96.128 dev wlp3s0 table adsl1
+```
+
+## on the client side for one interface : (no merging ... useless ^^)
+To set local IP of tun interface 10.9.0.2/24
+To set IP of local interface to use VPN on : 192.168.96.112 (this is the address of your IP having acess to internet)
+To set REMOTE_ADDR of the external IP of remote server
+To set Remote Server Port to 5353
+To set MTU of 1440
+
+```
+sudo ./mvpn -type client -local 10.9.0.2/24 -localips 192.168.96.112 -remote REMOTE_ADDR -port 5353 -mtu 1440
+```
+
+## on the client side for several interfaces : (will merge internet access of 192.168.96.112 and 192.168.2.3)
+To set local IP of tun interface 10.9.0.2/24
+To set IP of local interface to use VPN on : 192.168.96.112 and 192.168.2.3
+To set REMOTE_ADDR of the external IP of remote server
+To set Remote Server Port to 5353
+To set MTU of 1440
+
+```
+sudo ./mvpn -type client -local 10.9.0.2/24 -localips "192.168.96.112 192.168.2.3" -remote REMOTE_ADDR -port 5353 -mtu 1440
+```
