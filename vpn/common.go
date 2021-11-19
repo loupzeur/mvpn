@@ -1,12 +1,7 @@
 package vpn
 
 import (
-	"fmt"
-	"log"
-	"time"
-
 	"github.com/songgao/water"
-	"golang.org/x/net/ipv4"
 )
 
 //Global stuff
@@ -32,74 +27,59 @@ func (s VPNProcess) Run() {
 	go s.ifaceToChan()
 }
 
-//func that takes array of byte of ip header and return sequence number
-//return src, dst, seq, ack, len and flag from tcp packet
-func getSequence(data []byte) (int, int, int, int, int, int) {
-	startTcp := 0 //int(data[0]&0x0f) << 2 //length of ip header from packet
-	lenH := len(data)
+//rolling cache on 1 byte (255 elements)
+type byteCache struct {
+	Counter byte
+	Data    map[byte][]byte
+}
 
-	i := startTcp + 4 //start of sequence
-	src := int(data[0])<<8 | int(data[1])
-	dst := int(data[2])<<8 | int(data[3])
-	if i+7 > lenH {
-		return src, dst, 0, 0, 0, 0
+//Order send data  in the right order
+func (s *byteCache) Order(data []byte) byte {
+	s.Data[data[0]] = data[1:]
+	return data[0]
+}
+
+//ReturnOrderedData return the data in order until
+func (s *byteCache) ReturnOrderedData() [][]byte {
+	var data [][]byte
+	for idx, v := range s.Data {
+		if idx < s.Counter {
+			continue
+		}
+		data = append(data, v)
+		delete(s.Data, idx)
+		s.Counter = idx
 	}
-	return src, dst,
-		int(data[(i)])<<24 | int(data[i+1])<<16 | int(data[i+2])<<8 | int(data[i+3]),
-		int(data[(i+4)])<<24 | int(data[i+5])<<16 | int(data[i+6])<<8 | int(data[i+7]),
-		int(data[i+8]),
-		int(data[i+9])
+	return data
 }
 
-type tcpCache struct {
-	Time   time.Time
-	Packet []byte
-}
-
+//chanToIface channel data to the interface and reorder packets
 func (s VPNProcess) chanToIface() {
-	tcpReorderCache := map[string]tcpCache{}
-	go func() {
-		//cleanup cache every 30 seconds
-		t := func() {
-			now := time.Now().Add(-30 * time.Second)
-			for i := range tcpReorderCache {
-				if tcpReorderCache[i].Time.Before(now) {
-					delete(tcpReorderCache, i)
-				}
-			}
-		}
-		for {
-			t()
-			time.Sleep(30 * time.Second)
-		}
-	}()
+	pReorderCache := byteCache{}
+	last := byte(0)
+	//we need to reorder packets in case both network are not in sync
 	for data := range s.OUTChan {
-		//need to reorder tcp packet going out of interface
-		if len(data) > 12 && data[9] == 0x06 {
-			h, _ := ipv4.ParseHeader(data)
-			pktlen := len(data)
-			src, dst, seq, ack, len, flags := getSequence(data[h.Len:])
-			tcpLen := h.TotalLen - h.Len
-			log.Printf("<=%s %s %d %d %d %d %d %d %d %d %d\n", h.Dst.String(), h.Src.String(), h.Protocol, src, dst, seq, ack, flags, pktlen, len, tcpLen)
-			//will require reordering of the packet
-			key := fmt.Sprintf("%s:%d-%s:%d-%d-%d", h.Src.String(), src, h.Dst.String(), dst, seq, flags)
-			//first try remove duplicate packets
-			if _, ok := tcpReorderCache[key]; ok {
-				fmt.Println("Ignoring duplicate key: ", key)
-				continue
-			}
-			tcpReorderCache[key] = tcpCache{Time: time.Now()}
+		curIndex := pReorderCache.Order(data)
+		if curIndex+1 > last+1 {
+			continue
 		}
-		s.Iface.Write(data)
+		//we don't send everything, just elements that are in order
+		for _, v := range pReorderCache.ReturnOrderedData() {
+			s.Iface.Write(v)
+		}
 	}
 }
+
+//ifaceToChan channel data to the interface and count packets
 func (s VPNProcess) ifaceToChan() {
-	packet := make([]byte, MTU)
+	packet := make([]byte, MTU+1)
+	cCounter := []byte{0, 0}
 	for {
 		plen, err := s.Iface.Read(packet)
 		if err != nil {
 			break
 		}
-		s.INChan <- packet[:plen]
+		s.INChan <- append(cCounter[:1], packet[:plen]...)
+		cCounter[0] = (cCounter[0] + 1) % 255 //will never overflow
 	}
 }
