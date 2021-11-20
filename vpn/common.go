@@ -9,7 +9,7 @@ import (
 //Global stuff
 var (
 	MTU          = 1440
-	MaxCacheSize = 255
+	MaxCacheSize = 256
 )
 
 //only needed once per server
