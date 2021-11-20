@@ -1,12 +1,15 @@
 package vpn
 
 import (
+	"sort"
+
 	"github.com/songgao/water"
 )
 
 //Global stuff
 var (
-	MTU = 1440
+	MTU          = 1440
+	MaxCacheSize = 255
 )
 
 //only needed once per server
@@ -27,28 +30,36 @@ func (s VPNProcess) Run() {
 	go s.ifaceToChan()
 }
 
-//rolling cache on 1 byte (255 elements)
+//rolling cache on 1 byte (MaxCacheSize elements)
 type byteCache struct {
-	Counter byte
-	Data    map[byte][]byte
+	Counter int
+	Data    map[int][]byte
 }
 
 //Order send data  in the right order
 func (s *byteCache) Order(data []byte) byte {
-	s.Data[data[0]] = data[1:]
+	s.Data[int(data[0])] = data[1:]
 	return data[0]
 }
 
 //ReturnOrderedData return the data in order until
 func (s *byteCache) ReturnOrderedData() [][]byte {
 	var data [][]byte
-	for idx, v := range s.Data {
-		if idx < s.Counter {
+	keys := []int{}
+	for i := range s.Data {
+		keys = append(keys, i)
+	}
+	sort.Ints(keys)
+	for _, v := range keys {
+		if v < s.Counter%MaxCacheSize {
 			continue
 		}
-		data = append(data, v)
-		delete(s.Data, idx)
-		s.Counter = idx
+		if v > s.Counter+1 {
+			break
+		}
+		data = append(data, s.Data[v])
+		delete(s.Data, v)
+		s.Counter = v
 	}
 	return data
 }
@@ -60,7 +71,7 @@ func (s VPNProcess) chanToIface() {
 	//we need to reorder packets in case both network are not in sync
 	for data := range s.OUTChan {
 		curIndex := pReorderCache.Order(data)
-		if curIndex+1 > last+1 {
+		if curIndex > last {
 			continue
 		}
 		//we don't send everything, just elements that are in order
@@ -73,13 +84,13 @@ func (s VPNProcess) chanToIface() {
 //ifaceToChan channel data to the interface and count packets
 func (s VPNProcess) ifaceToChan() {
 	packet := make([]byte, MTU+1)
-	cCounter := []byte{0, 0}
+	cCounter := []byte{0}
 	for {
 		plen, err := s.Iface.Read(packet)
 		if err != nil {
 			break
 		}
-		s.INChan <- append(cCounter[:1], packet[:plen]...)
-		cCounter[0] = (cCounter[0] + 1) % 255 //will never overflow
+		s.INChan <- append(cCounter, packet[:plen]...)
+		cCounter[0]++ //will return to 0 once going above 255!
 	}
 }
