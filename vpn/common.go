@@ -66,7 +66,7 @@ func (s *byteCache) ReturnOrderedData() [][]byte {
 
 //chanToIface channel data to the interface and reorder packets
 func (s VPNProcess) chanToIface() {
-	pReorderCache := byteCache{}
+	pReorderCache := &byteCache{Counter: 0, Data: map[int][]byte{}}
 	last := byte(0)
 	//we need to reorder packets in case both network are not in sync
 	for data := range s.OUTChan {
