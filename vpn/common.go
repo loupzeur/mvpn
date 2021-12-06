@@ -1,7 +1,9 @@
 package vpn
 
 import (
+	"fmt"
 	"sort"
+	"time"
 
 	"github.com/songgao/water"
 )
@@ -32,13 +34,20 @@ func (s VPNProcess) Run() {
 
 //rolling cache on 1 byte (MaxCacheSize elements)
 type byteCache struct {
-	Counter int
-	Data    map[int][]byte
+	Counter     int
+	Data        map[int][]byte
+	LastCounter time.Time
+}
+
+func (s *byteCache) SetCounter(counter int) {
+	s.Counter = counter
+	s.LastCounter = time.Now()
 }
 
 //Order send data  in the right order
 func (s *byteCache) Order(data []byte) byte {
 	s.Data[int(data[0])] = data[1:]
+	fmt.Printf("Adding counter : %d\n", data[0])
 	return data[0]
 }
 
@@ -54,19 +63,23 @@ func (s *byteCache) ReturnOrderedData() [][]byte {
 		if v < s.Counter%MaxCacheSize {
 			continue
 		}
-		if v > s.Counter+1 {
+		//add a timeout to send anyway if no packets is received
+		//need a way to reask not received packet
+		if v > s.Counter+1 && time.Now().Before(s.LastCounter.Add(1*time.Second)) {
+			//todo ask to resend packet here and wait answer
+			//need to be done in current latency * 4 (2 way for ask and answer)
 			break
 		}
 		data = append(data, s.Data[v])
 		delete(s.Data, v)
-		s.Counter = v
+		s.SetCounter(v)
 	}
 	return data
 }
 
 //chanToIface channel data to the interface and reorder packets
 func (s VPNProcess) chanToIface() {
-	pReorderCache := &byteCache{Counter: 0, Data: map[int][]byte{}}
+	pReorderCache := &byteCache{Counter: 0, Data: map[int][]byte{}, LastCounter: time.Now()}
 	//we need to reorder packets in case both network are not in sync
 	for data := range s.OUTChan {
 		pReorderCache.Order(data)
@@ -74,6 +87,7 @@ func (s VPNProcess) chanToIface() {
 		for _, v := range pReorderCache.ReturnOrderedData() {
 			s.Iface.Write(v)
 		}
+		fmt.Printf("Current Receiving counter %d len (%d)\n", pReorderCache.Counter, len(pReorderCache.Data))
 	}
 }
 
@@ -87,6 +101,7 @@ func (s VPNProcess) ifaceToChan() {
 			break
 		}
 		s.INChan <- append(cCounter, packet[:plen]...)
+		fmt.Printf("Current Sending counter %d\n", cCounter[0])
 		cCounter[0]++ //will return to 0 once going above 255!
 	}
 }
