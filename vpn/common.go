@@ -11,7 +11,7 @@ import (
 //Global stuff
 var (
 	MTU          = 1440
-	MaxCacheSize = 256
+	MaxCacheSize = 255
 )
 
 //only needed once per server
@@ -77,22 +77,25 @@ func (s *byteCache) ReturnOrderedData() ([][]byte, []byte) {
 	}
 	sort.Ints(keys)
 	for _, v := range keys {
+		if s.Counter == MaxCacheSize {
+			s.Counter = 1
+		}
 		if v < s.Counter%MaxCacheSize {
 			continue
 		}
 		//add a timeout to send anyway if no packets is received
 		//need a way to reask not received packet
 		//!todo get average latency with ping and use it here
-		if v > s.Counter+1 && time.Now().Before(s.LastCounter.Add(100*time.Millisecond)) {
+		if v > s.Counter+1 && time.Now().Before(s.LastCounter.Add(200*time.Millisecond)) {
 			//need to be done in current latency * 2 (2 way for ask and answer)
-			log.Printf("Missing packet %d\n", v)
+			log.Printf("Missing packet %d\n", v-1)
 			//ask the missing packet by asking it's index in the rolling cache
-			s.LastCounter = s.LastCounter.Add(100 * time.Millisecond)
+			s.LastCounter = s.LastCounter.Add(200 * time.Millisecond)
 			last := v - 1
 			if last == 0 {
-				last = 255
+				last = MaxCacheSize
 			}
-			return nil, []byte{byte(last)}
+			return data, []byte{byte(last)}
 		}
 		data = append(data, s.Data[v])
 		//we need to keep data for a while, so we can resend it
@@ -119,12 +122,11 @@ func (s VPNProcess) chanToIface() {
 		s.cacheOut.Order(data)
 		//we don't send everything, just elements that are in order
 		data, missing := s.cacheOut.ReturnOrderedData()
-		if missing != nil && (s.lastMissIdx != missing[0] || time.Now().After(s.lastMissTime.Add(100*time.Millisecond))) {
+		if missing != nil && (s.lastMissIdx != missing[0] || time.Now().After(s.lastMissTime.Add(200*time.Millisecond))) {
 			log.Printf("Asking Missing packet %d\n", missing)
 			s.INChan <- missing //send missing to the other side
 			s.lastMissIdx = missing[0]
 			s.lastMissTime = time.Now()
-			continue
 		}
 		s.lastMissIdx = 0
 		for _, v := range data {

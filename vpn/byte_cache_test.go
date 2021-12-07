@@ -73,7 +73,7 @@ func TestByteOrder4(t *testing.T) {
 		t.Log(i, v)
 	}
 	bc.Order([]byte{254, 4, 1})
-	bc.Order([]byte{0, 6, 1})
+	bc.Order([]byte{1, 6, 1})
 	data, _ = bc.ReturnOrderedData()
 	for i, v := range data {
 		t.Log(i, v)
