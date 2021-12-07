@@ -1,7 +1,6 @@
 package vpn
 
 import (
-	"fmt"
 	"log"
 	"sort"
 	"time"
@@ -24,6 +23,9 @@ type VPNProcess struct {
 
 	cacheIn  *byteCache
 	cacheOut *byteCache
+
+	lastMissIdx  byte //0 isn't an index :)
+	lastMissTime time.Time
 }
 
 func NewVPN(iface *water.Interface, port int) VPNProcess {
@@ -35,8 +37,10 @@ func NewVPN(iface *water.Interface, port int) VPNProcess {
 		Iface:   iface,
 		Port:    port,
 		//some rolling cache for resending packets in case of failure
-		cacheIn:  &byteCache{Counter: 1, Data: map[int][]byte{}, LastCounter: time.Now()},
-		cacheOut: &byteCache{Counter: 1, Data: map[int][]byte{}, LastCounter: time.Now()},
+		cacheIn:      &byteCache{Counter: 1, Data: map[int][]byte{}, LastCounter: time.Now()},
+		cacheOut:     &byteCache{Counter: 1, Data: map[int][]byte{}, LastCounter: time.Now()},
+		lastMissIdx:  0,
+		lastMissTime: time.Now(),
 	}
 }
 func (s VPNProcess) Run() {
@@ -61,14 +65,12 @@ func (s *byteCache) SetCounter(counter int) {
 //Order send data  in the right order
 func (s *byteCache) Order(data []byte) byte {
 	s.Data[int(data[0])] = data[1:]
-	fmt.Printf("Adding counter : %d\n", data[0])
 	return data[0]
 }
 
 //ReturnOrderedData return the data in order until, if needed, the missing packet
-func (s *byteCache) ReturnOrderedData() ([][]byte, [][]byte) {
+func (s *byteCache) ReturnOrderedData() ([][]byte, []byte) {
 	var data [][]byte
-	var missing [][]byte
 	keys := []int{}
 	for i := range s.Data {
 		keys = append(keys, i)
@@ -81,18 +83,23 @@ func (s *byteCache) ReturnOrderedData() ([][]byte, [][]byte) {
 		//add a timeout to send anyway if no packets is received
 		//need a way to reask not received packet
 		//!todo get average latency with ping and use it here
-		if v > s.Counter+1 && time.Now().Before(s.LastCounter.Add(1*time.Second)) {
+		if v > s.Counter+1 && time.Now().Before(s.LastCounter.Add(100*time.Millisecond)) {
 			//need to be done in current latency * 2 (2 way for ask and answer)
 			log.Printf("Missing packet %d\n", v)
 			//ask the missing packet by asking it's index in the rolling cache
-			missing = append(missing, []byte{byte(v)})
-			break
+			s.LastCounter = s.LastCounter.Add(100 * time.Millisecond)
+			last := v - 1
+			if last == 0 {
+				last = 255
+			}
+			return nil, []byte{byte(last)}
 		}
 		data = append(data, s.Data[v])
+		//we need to keep data for a while, so we can resend it
 		delete(s.Data, v)
 		s.SetCounter(v)
 	}
-	return data, missing
+	return data, nil
 }
 
 //chanToIface channel data to the interface and reorder packets
@@ -102,7 +109,7 @@ func (s VPNProcess) chanToIface() {
 		if len(data) == 1 {
 			//this is a packet request, no need to pass it through the interface
 			log.Printf("Sending Missing packet %d\n", data[0])
-			if len(s.cacheIn.Data) < int(data[0]) {
+			if len(s.cacheIn.Data) > int(data[0]) {
 				//data only contains the index, so we can append it's data
 				//and send it back
 				s.INChan <- append(data, s.cacheIn.Data[int(data[0])]...)
@@ -112,13 +119,18 @@ func (s VPNProcess) chanToIface() {
 		s.cacheOut.Order(data)
 		//we don't send everything, just elements that are in order
 		data, missing := s.cacheOut.ReturnOrderedData()
-		for _, v := range missing {
-			s.INChan <- v //send missing to the other side
+		if missing != nil && (s.lastMissIdx != missing[0] || time.Now().After(s.lastMissTime.Add(100*time.Millisecond))) {
+			log.Printf("Asking Missing packet %d\n", missing)
+			s.INChan <- missing //send missing to the other side
+			s.lastMissIdx = missing[0]
+			s.lastMissTime = time.Now()
+			continue
 		}
+		s.lastMissIdx = 0
 		for _, v := range data {
 			s.Iface.Write(v)
 		}
-		fmt.Printf("Current Receiving counter %d len (%d)\n", s.cacheOut.Counter, len(s.cacheOut.Data))
+		//log.Printf("Current Receiving counter %d len (%d)\n", s.cacheOut.Counter, len(s.cacheOut.Data))
 	}
 }
 
@@ -132,9 +144,10 @@ func (s VPNProcess) ifaceToChan() {
 			break
 		}
 		//cache for outgoing packets
-		s.cacheIn.Order(packet[:plen])
-		s.INChan <- append(cCounter, packet[:plen]...)
-		fmt.Printf("Current Sending counter %d\n", cCounter[0])
+		tmp := append(cCounter, packet[:plen]...)
+		s.cacheIn.Order(tmp)
+		s.INChan <- tmp
+		//log.Printf("Current Sending counter %d\n", cCounter[0])
 		cCounter[0]++ //will return to 0 once going above 255!
 		if cCounter[0] == 0 {
 			//0 is for a call for missing packet
