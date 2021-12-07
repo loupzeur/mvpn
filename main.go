@@ -29,7 +29,7 @@ func main() {
 		log.Fatalln("\nlocal ip is not specified")
 	}
 
-	//! to be removed
+	//!todo to be removed
 	//create a tunnel externaly to avoid root requirements
 	iface, err := water.New(water.Config{DeviceType: water.TUN})
 	if nil != err {

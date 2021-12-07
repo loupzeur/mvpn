@@ -28,10 +28,13 @@ type VPNProcess struct {
 
 func NewVPN(iface *water.Interface, port int) VPNProcess {
 	return VPNProcess{
-		INChan:   make(chan []byte),
-		OUTChan:  make(chan []byte),
-		Iface:    iface,
-		Port:     port,
+		//Is the chan that get packet FROM the interface to internet (packet coming from INside)
+		INChan: make(chan []byte),
+		//is the chan that get packet FROM internet to the interface (packet coming from OUTside)
+		OUTChan: make(chan []byte),
+		Iface:   iface,
+		Port:    port,
+		//some rolling cache for resending packets in case of failure
 		cacheIn:  &byteCache{Counter: 1, Data: map[int][]byte{}, LastCounter: time.Now()},
 		cacheOut: &byteCache{Counter: 1, Data: map[int][]byte{}, LastCounter: time.Now()},
 	}

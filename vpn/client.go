@@ -32,7 +32,7 @@ starStream:
 	if err != nil {
 		log.Fatalln("Unable to open stream :", err)
 	}
-	//todo use remote gateway address
+	//!todo use remote gateway address
 	go utils.ContinuousPing("10.9.0.1")
 	go func() {
 		packet := make([]byte, MTU)
